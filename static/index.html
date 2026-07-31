@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>금융상품 추천 챗봇</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="chat-panel" aria-label="금융상품 추천 챗봇">
+        <header class="chat-header">
+          <div>
+            <h1>금융상품 추천 챗봇</h1>
+            <p>정기예금과 적금을 조건에 맞춰 추천해드려요.</p>
+          </div>
+          <button id="resetButton" type="button">초기화</button>
+        </header>
+
+        <div id="statusBar" class="status-bar">
+          <span>상품유형 미정</span>
+          <span>기간 미정</span>
+          <span>금리기준 미정</span>
+        </div>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="chatForm" class="composer">
+          <input
+            id="messageInput"
+            name="message"
+            type="text"
+            autocomplete="off"
+            placeholder="예: 12개월 적금 추천해줘"
+            aria-label="메시지"
+          />
+          <button id="sendButton" type="submit">전송</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
