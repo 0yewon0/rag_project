@@ -17,16 +17,13 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
-
-# 금융감독원 API에서 받은 원천 JSON 파일을 저장하는 위치.
-RAW_DATA_DIR = Path("data/raw")
-
-# 챗봇이 바로 사용할 수 있도록 정제한 JSON 파일을 저장하는 위치.
-PROCESSED_DATA_DIR = Path("data/processed")
+from config import PROCESSED_DATA_DIR, RAW_DATA_DIR
+from models import Product, ProductConditions, ProductOption, ProductType
 
 # 상품 유형별 원천 파일 경로. key는 이후 정규화된 `product_type` 값으로 사용된다.
-RAW_FILES = {
+RAW_FILES: dict[ProductType, Path] = {
     "deposit": RAW_DATA_DIR / "deposit_products.json",
     "saving": RAW_DATA_DIR / "saving_products.json",
 }
@@ -201,7 +198,7 @@ def find_monthly_amount(text, bound_words):
     return None
 
 
-def extract_conditions(product):
+def extract_conditions(product: dict[str, Any]) -> ProductConditions:
     """
     상품 설명에서 추천 필터링에 사용할 가입 조건을 추출한다.
 
@@ -216,7 +213,7 @@ def extract_conditions(product):
         API가 조건을 구조화해서 제공하지 않는 부분은 설명 텍스트의 키워드를
         기준으로 단순 추출한다. 따라서 결과는 추천 보조 정보로 사용하고,
         최종 판단은 상품 공시와 약관 확인이 필요하다.
-        예를 들어 '신용카드 사용이 필수적이지 않습니다'라는 문장도 
+        예를 들어 '신용카드 사용이 필수적이지 않습니다'라는 문장도
         '카드' 키워드가 포함되어 있어 `requires_card`가 True로 나올수도 있다.
     """
     text = product_text(product)
@@ -224,14 +221,12 @@ def extract_conditions(product):
 
     return {
         "requires_card": any(
-            keyword in text
-            for keyword in ["카드", "체크카드", "신용카드"]
+            keyword in text for keyword in ["카드", "체크카드", "신용카드"]
         ),
         "requires_salary_transfer": "급여" in text,
         "requires_auto_transfer": "자동이체" in text,
         "supports_mobile": any(
-            keyword in join_way
-            for keyword in ["스마트폰", "모바일", "인터넷"]
+            keyword in join_way for keyword in ["스마트폰", "모바일", "인터넷"]
         ),
         "monthly_min_amount": find_monthly_amount(text, ["이상", "최소"]),
         "monthly_max_amount": find_monthly_amount(
@@ -241,7 +236,10 @@ def extract_conditions(product):
     }
 
 
-def normalize_option(product_type, option):
+def normalize_option(
+    product_type: ProductType,
+    option: dict[str, Any],
+) -> ProductOption:
     """
     원천 금리 옵션 항목을 프로젝트 공통 필드명으로 변환한다.
 
@@ -271,7 +269,11 @@ def normalize_option(product_type, option):
     return normalized
 
 
-def normalize_product(product_type, product, options):
+def normalize_product(
+    product_type: ProductType,
+    product: dict[str, Any],
+    options: list[dict[str, Any]],
+) -> Product:
     """
     상품 기본 정보와 금리 옵션 목록을 하나의 정규화된 상품 딕셔너리로 만든다.
 
@@ -319,7 +321,10 @@ def normalize_product(product_type, product, options):
     }
 
 
-def merge_products(product_type, raw_data):
+def merge_products(
+    product_type: ProductType,
+    raw_data: dict[str, Any],
+) -> list[Product]:
     """
     원천 데이터의 상품 기본 정보와 금리 옵션 정보를 상품 단위로 병합한다.
 
@@ -362,7 +367,7 @@ def main():
         `data/processed/products.json` 파일을 생성하거나 덮어쓴다.
         처리한 상품 수를 콘솔에 출력한다.
     """
-    all_products = []
+    all_products: list[Product] = []
 
     for product_type, raw_path in RAW_FILES.items():
         raw_data = read_json(raw_path)

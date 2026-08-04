@@ -1,6 +1,7 @@
 """FastAPI 채팅 endpoint의 오류 변환 동작을 검증한다."""
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -14,28 +15,42 @@ class ChatEndpointTests(unittest.TestCase):
 
     def setUp(self):
         """각 테스트가 사용할 가짜 그래프와 빈 세션 저장소를 준비한다."""
-        self.original_graph_app = web_app.GRAPH_APP
-        web_app.GRAPH_APP = object()
-        web_app.SESSIONS.clear()
-
-    def tearDown(self):
-        """테스트가 변경한 전역 그래프와 세션 상태를 복원한다."""
-        web_app.GRAPH_APP = self.original_graph_app
-        web_app.SESSIONS.clear()
+        state = SimpleNamespace(
+            graph_app=object(),
+            sessions=web_app.SessionStore(),
+        )
+        self.http_request = SimpleNamespace(
+            app=SimpleNamespace(state=state),
+        )
 
     def test_converts_openai_error_to_service_unavailable(self):
         """OpenAI 오류를 재시도 안내가 포함된 HTTP 503으로 변환한다."""
-        request = web_app.ChatRequest(message="적금 추천해줘")
+        payload = web_app.ChatRequest(message="적금 추천해줘")
 
-        with patch(
-            "app.run_turn",
-            side_effect=OpenAIError("offline"),
-        ), patch.object(web_app.logger, "exception"):
+        with (
+            patch(
+                "app.run_turn",
+                side_effect=OpenAIError("offline"),
+            ),
+            patch.object(web_app.logger, "exception"),
+        ):
             with self.assertRaises(HTTPException) as raised:
-                web_app.chat(request)
+                web_app.chat(payload, self.http_request)
 
         self.assertEqual(raised.exception.status_code, 503)
         self.assertIn("잠시 후 다시", raised.exception.detail)
+
+    def test_session_store_evicts_least_recently_used_session(self):
+        """세션 제한을 넘으면 가장 오래 사용하지 않은 상태를 제거한다."""
+        sessions = web_app.SessionStore(max_sessions=2)
+        first = sessions.get_or_create("first")
+        first["product_type"] = "deposit"
+        sessions.set("first", first)
+        sessions.get_or_create("second")
+        sessions.get_or_create("third")
+
+        self.assertEqual(len(sessions), 2)
+        self.assertIsNone(sessions.get_or_create("first")["product_type"])
 
 
 if __name__ == "__main__":

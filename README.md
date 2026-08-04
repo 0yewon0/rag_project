@@ -14,7 +14,8 @@
 - 구조화 조건 필터와 의미 검색을 결합한 상품 검색
 - LangGraph 기반 멀티턴 추천 흐름
 - FastAPI 웹 챗봇 제공
-- 조건 추출과 검색 로직 단위 테스트
+- 크기 제한 세션 저장소와 FastAPI 앱 상태 기반 런타임 관리
+- 조건 추출과 검색 로직 단위 테스트, Ruff와 GitHub Actions CI
 
 ## 프로젝트 구조
 
@@ -24,7 +25,8 @@
 ├── process_products.py      # 원천 JSON을 챗봇용 정제 데이터로 변환
 ├── build_documents.py       # 정제 상품 데이터를 LangChain Document로 변환
 ├── build_vectorstore.py     # Document를 임베딩해 Chroma 벡터스토어 생성
-├── config.py                # 환경 변수와 OpenAI/Chroma 공통 설정
+├── config.py                # 프로젝트 기준 경로와 OpenAI/Chroma 공통 설정
+├── models.py                # 정제 상품과 금리 옵션의 TypedDict
 ├── vectorstore.py           # 기존 Chroma 벡터스토어 연결
 ├── preferences.py           # 사용자 대화에서 추천 조건 추출
 ├── retrieval.py             # 상품 필터, 금리 정렬과 의미 검색
@@ -32,6 +34,8 @@
 ├── app.py                   # FastAPI 웹 서버
 ├── tests/
 │   ├── test_app.py          # 웹 API 오류 처리 테스트
+│   ├── test_config.py       # 프로젝트 기준 경로 테스트
+│   ├── test_graph_chat.py   # 대화 기록 제한 테스트
 │   ├── test_preferences.py  # 추천 조건 추출 테스트
 │   └── test_retrieval.py    # 상품 검색과 정렬 테스트
 ├── static/
@@ -43,6 +47,8 @@
 │   ├── processed/           # 정제된 상품 JSON 데이터
 │   └── chroma/              # 생성된 Chroma 벡터스토어
 ├── pyproject.toml
+├── uv.lock
+├── .github/workflows/ci.yml # 정적 검사, 포맷 검사와 단위 테스트
 └── .env.example
 ```
 
@@ -89,6 +95,9 @@ https://www.fss.or.kr/fss/main/contents.do?menuNo=200008
 ```bash
 uv sync
 ```
+
+데이터, 정적 파일과 `.env` 경로는 `config.py`의 `BASE_DIR`을 기준으로 하므로
+Python 프로세스를 어느 디렉터리에서 시작해도 같은 프로젝트 파일을 사용합니다.
 
 ## 원천 데이터 수집
 
@@ -161,7 +170,7 @@ uv run python graph_chat.py --demo
 FastAPI 서버를 실행합니다.
 
 ```bash
-uv run fastapi dev app.py
+uv run uvicorn app:app --reload
 ```
 
 브라우저에서 다음 주소로 접속합니다.
@@ -172,7 +181,8 @@ http://127.0.0.1:8000
 
 OpenAI API 연결에 실패하면 서버는 `503 Service Unavailable`과 재시도 안내를
 반환합니다. 대화 상태는 개발 서버 메모리에 저장되므로 서버를 재시작하면
-초기화됩니다.
+초기화됩니다. 메모리 사용량을 제한하기 위해 최근 사용 세션은 최대 1,000개,
+각 세션의 대화 메시지는 최근 20개까지 보관합니다.
 
 ## 테스트
 
@@ -182,6 +192,15 @@ OpenAI API 연결에 실패하면 서버는 `503 Service Unavailable`과 재시�
 ```bash
 uv run python -m unittest discover -s tests -v
 ```
+
+정적 검사와 포맷 검사는 다음 명령으로 실행합니다.
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+```
+
+GitHub Actions도 모든 push와 pull request에서 같은 검사와 테스트를 실행합니다.
 
 ## 주요 파일 설명
 
@@ -207,8 +226,14 @@ LangChain `Document`를 OpenAI 임베딩 모델로 벡터화해 로컬 Chroma �
 
 ### `config.py`와 `vectorstore.py`
 
-`config.py`는 환경 변수 로딩과 모델명, Chroma 경로 같은 공통 설정을 관리합니다.
+`config.py`는 프로젝트 루트인 `BASE_DIR`, 환경 변수 로딩과 모델명, Chroma 경로
+같은 공통 설정을 관리합니다.
 `vectorstore.py`는 OpenAI 임베딩 모델을 사용해 기존 Chroma 컬렉션에 연결합니다.
+
+### `models.py`
+
+전처리된 상품, 상품 조건과 금리 옵션의 `TypedDict`를 정의합니다. 전처리,
+LangChain 문서 생성과 검색 코드가 같은 데이터 구조를 공유하도록 돕습니다.
 
 ### `preferences.py`
 
@@ -225,13 +250,15 @@ LangChain `Document`를 OpenAI 임베딩 모델로 벡터화해 로컬 Chroma �
 
 LangGraph 기반 멀티턴 챗봇입니다.
 필수 조건이 부족하면 추가 질문을 하고, 조건이 모이면 검색 노드와 OpenAI 답변
-생성 노드를 순서대로 실행합니다. 콘솔 실행 진입점도 이 파일에 있습니다.
+생성 노드를 순서대로 실행합니다. LLM과 prompt는 시작 시 한 번 준비해 대화 턴마다
+재사용하며, 콘솔 실행 진입점도 이 파일에 있습니다.
 
 ### `app.py`
 
 FastAPI 웹 서버입니다.
 브라우저 요청을 LangGraph 챗봇에 전달하고 세션별 대화 상태와 추출 조건을
-응답으로 반환합니다. OpenAI 연결 오류는 사용자용 HTTP 503 응답으로 변환합니다.
+응답으로 반환합니다. 그래프와 세션 저장소는 FastAPI 앱 상태에서 관리하고,
+OpenAI 연결 오류는 사용자용 HTTP 503 응답으로 변환합니다.
 
 ## 참고
 

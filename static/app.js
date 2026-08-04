@@ -36,6 +36,12 @@ function setLoading(isLoading) {
   inputEl.disabled = isLoading;
 }
 
+function formatPreference(value, trueLabel, falseLabel, unknownLabel) {
+  if (value === true) return trueLabel;
+  if (value === false) return falseLabel;
+  return unknownLabel;
+}
+
 function updateStatus(data = {}) {
   const productType = productTypeLabels[data.product_type] || "상품유형 미정";
   const term = data.term_months ? `${data.term_months}개월` : "기간 미정";
@@ -44,13 +50,30 @@ function updateStatus(data = {}) {
   const monthlyAmount = data.monthly_amount
     ? `월 ${Number(data.monthly_amount).toLocaleString("ko-KR")}원`
     : "납입액 미정";
-  const card = data.card_ok === false ? "카드 제외" : "카드 조건 미정";
-  const salary =
-    data.salary_transfer_ok === false ? "급여이체 제외" : "급여이체 미정";
-  const autoTransfer =
-    data.auto_transfer_ok === false ? "자동이체 제외" : "자동이체 미정";
-  const mobile =
-    data.mobile_join_preferred === true ? "모바일 선호" : "가입방식 미정";
+  const card = formatPreference(
+    data.card_ok,
+    "카드 가능",
+    "카드 제외",
+    "카드 조건 미정",
+  );
+  const salary = formatPreference(
+    data.salary_transfer_ok,
+    "급여이체 가능",
+    "급여이체 제외",
+    "급여이체 미정",
+  );
+  const autoTransfer = formatPreference(
+    data.auto_transfer_ok,
+    "자동이체 가능",
+    "자동이체 제외",
+    "자동이체 미정",
+  );
+  const mobile = formatPreference(
+    data.mobile_join_preferred,
+    "모바일 선호",
+    "영업점 선호",
+    "가입방식 미정",
+  );
 
   statusBar.innerHTML = "";
   for (const label of [

@@ -19,6 +19,7 @@ from langgraph.graph import END, StateGraph
 
 from build_documents import read_products
 from config import DEFAULT_CHAT_MODEL, load_env, require_openai_key
+from models import Product
 from preferences import (
     PRODUCT_TYPE_NAMES,
     RATE_PREFERENCE_NAMES,
@@ -26,6 +27,48 @@ from preferences import (
 )
 from retrieval import retrieve_products
 from vectorstore import load_vectorstore
+
+MAX_MESSAGE_HISTORY = 20
+
+ANSWER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "\n".join(
+                [
+                    "너는 예금과 적금 상품을 추천하는 금융상품 안내 챗봇이야.",
+                    "반드시 제공된 상품 정보 안에서만 답해.",
+                    "사용자의 조건에 맞는 상품만 추천해.",
+                    "금리는 기본금리와 최고우대금리를 구분해서 설명해.",
+                    "추천 이유와 가입 전 확인할 주의사항을 짧게 포함해.",
+                    "최종 가입 전 금융회사 공시와 약관 확인을 안내해.",
+                ]
+            ),
+        ),
+        (
+            "human",
+            "\n".join(
+                [
+                    "사용자 대화:",
+                    "{user_request}",
+                    "",
+                    "추출된 사용자 조건:",
+                    "- 상품유형: {product_type_name}",
+                    "- 기간: {term_months}개월",
+                    "- 금리 기준: {rate_preference}",
+                    "- 월 납입 예정액: {monthly_amount}",
+                    "- 카드 조건 가능 여부: {card_ok}",
+                    "- 급여이체 가능 여부: {salary_transfer_ok}",
+                    "- 자동이체 가능 여부: {auto_transfer_ok}",
+                    "- 모바일 가입 선호: {mobile_join_preferred}",
+                    "",
+                    "검색된 상품 정보:",
+                    "{context}",
+                ]
+            ),
+        ),
+    ]
+)
 
 
 class ChatState(TypedDict):
@@ -43,6 +86,22 @@ class ChatState(TypedDict):
     pending_question: str | None
     retrieved_context: str | None
     answer: str | None
+
+
+def append_message(
+    messages: list[BaseMessage],
+    message: BaseMessage,
+) -> list[BaseMessage]:
+    """새 메시지를 추가하고 최근 대화 기록만 남긴다.
+
+    Args:
+        messages (list[BaseMessage]): 현재까지 저장된 대화 메시지.
+        message (BaseMessage): 마지막에 추가할 사용자 또는 AI 메시지.
+
+    Returns:
+        list[BaseMessage]: 최대 `MAX_MESSAGE_HISTORY`개로 제한된 메시지 목록.
+    """
+    return (messages + [message])[-MAX_MESSAGE_HISTORY:]
 
 
 def ask_missing_info(state):
@@ -70,7 +129,10 @@ def ask_missing_info(state):
     return {
         **state,
         "pending_question": question,
-        "messages": state["messages"] + [AIMessage(content=question)],
+        "messages": append_message(
+            state["messages"],
+            AIMessage(content=question),
+        ),
     }
 
 
@@ -88,11 +150,23 @@ def route_after_missing_check(state) -> Literal["retrieve", "end"]:
     return "retrieve"
 
 
-def generate_answer(state):
+def create_chat_model():
+    """환경 설정에 맞는 답변 생성용 OpenAI 채팅 모델을 만든다.
+
+    Returns:
+        ChatOpenAI: 그래프의 모든 대화 턴에서 재사용할 채팅 모델.
+    """
+    model_name = os.getenv("OPENAI_CHAT_MODEL", DEFAULT_CHAT_MODEL)
+    return ChatOpenAI(model=model_name, temperature=0.2)
+
+
+def generate_answer(state, llm, prompt=ANSWER_PROMPT):
     """검색된 상품 context와 사용자 조건으로 최종 안내 답변을 생성한다.
 
     Args:
         state (ChatState): 사용자 조건과 `retrieved_context`가 담긴 상태.
+        llm (BaseChatModel): 서버 또는 콘솔 시작 시 생성한 채팅 모델.
+        prompt (ChatPromptTemplate): 답변 생성에 재사용할 prompt template.
 
     Returns:
         ChatState: OpenAI 답변과 AI 메시지가 추가된 상태.
@@ -100,9 +174,6 @@ def generate_answer(state):
     Notes:
         모델은 검색 context 밖의 정보를 추측하지 않도록 system prompt로 제한한다.
     """
-    model_name = os.getenv("OPENAI_CHAT_MODEL", DEFAULT_CHAT_MODEL)
-    llm = ChatOpenAI(model=model_name, temperature=0.2)
-
     product_type_name = PRODUCT_TYPE_NAMES.get(
         state.get("product_type"),
         state.get("product_type") or "상품",
@@ -115,46 +186,6 @@ def generate_answer(state):
         str(message.content)
         for message in state["messages"]
         if isinstance(message, HumanMessage)
-    )
-
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "\n".join(
-                    [
-                        "너는 예금과 적금 상품을 추천하는 금융상품 안내 챗봇이야.",
-                        "반드시 제공된 상품 정보 안에서만 답해.",
-                        "사용자의 조건에 맞는 상품만 추천해.",
-                        "금리는 기본금리와 최고우대금리를 구분해서 설명해.",
-                        "추천 이유와 가입 전 확인할 주의사항을 짧게 포함해.",
-                        "최종 가입 전 금융회사 공시와 약관 확인을 안내해.",
-                    ]
-                ),
-            ),
-            (
-                "human",
-                "\n".join(
-                    [
-                        "사용자 대화:",
-                        "{user_request}",
-                        "",
-                        "추출된 사용자 조건:",
-                        "- 상품유형: {product_type_name}",
-                        "- 기간: {term_months}개월",
-                        "- 금리 기준: {rate_preference}",
-                        "- 월 납입 예정액: {monthly_amount}",
-                        "- 카드 조건 가능 여부: {card_ok}",
-                        "- 급여이체 가능 여부: {salary_transfer_ok}",
-                        "- 자동이체 가능 여부: {auto_transfer_ok}",
-                        "- 모바일 가입 선호: {mobile_join_preferred}",
-                        "",
-                        "검색된 상품 정보:",
-                        "{context}",
-                    ]
-                ),
-            ),
-        ]
     )
 
     response = (prompt | llm).invoke(
@@ -175,16 +206,20 @@ def generate_answer(state):
     return {
         **state,
         "answer": response.content,
-        "messages": state["messages"] + [AIMessage(content=response.content)],
+        "messages": append_message(
+            state["messages"],
+            AIMessage(content=response.content),
+        ),
     }
 
 
-def build_graph(products, vectorstore):
+def build_graph(products: list[Product], vectorstore, llm):
     """상품 데이터와 벡터스토어가 연결된 LangGraph 앱을 생성한다.
 
     Args:
         products (list[dict]): 정제된 금융상품 목록.
         vectorstore (Chroma): 의미 검색에 사용할 금융상품 벡터스토어.
+        llm (BaseChatModel): 답변 생성에 재사용할 채팅 모델.
 
     Returns:
         CompiledStateGraph: 대화 턴을 실행할 수 있도록 컴파일된 그래프.
@@ -201,7 +236,10 @@ def build_graph(products, vectorstore):
             vectorstore=vectorstore,
         ),
     )
-    graph.add_node("generate_answer", generate_answer)
+    graph.add_node(
+        "generate_answer",
+        partial(generate_answer, llm=llm),
+    )
 
     graph.set_entry_point("extract_preferences")
     graph.add_edge("extract_preferences", "ask_missing_info")
@@ -254,7 +292,10 @@ def run_turn(app, state, user_text):
     """
     next_state = {
         **state,
-        "messages": state["messages"] + [HumanMessage(content=user_text)],
+        "messages": append_message(
+            state["messages"],
+            HumanMessage(content=user_text),
+        ),
     }
     return app.invoke(next_state)
 
@@ -326,7 +367,8 @@ def main():
     require_openai_key()
     products = read_products()
     vectorstore = load_vectorstore()
-    app = build_graph(products, vectorstore)
+    llm = create_chat_model()
+    app = build_graph(products, vectorstore, llm)
 
     if args.demo:
         run_scripted(app, ["상품 추천해줘", "적금", "12개월", "최고우대금리"])

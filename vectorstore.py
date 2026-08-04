@@ -20,8 +20,7 @@ def load_vectorstore():
     """
     if not PERSIST_DIR.exists():
         raise RuntimeError(
-            "Chroma index is missing. Run: "
-            "uv run python build_vectorstore.py --reset"
+            "Chroma index is missing. Run: uv run python build_vectorstore.py --reset"
         )
 
     embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL)

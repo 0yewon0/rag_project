@@ -46,9 +46,7 @@ def clean_metadata(documents):
     cleaned = []
     for document in documents:
         document.metadata = {
-            key: value
-            for key, value in document.metadata.items()
-            if value is not None
+            key: value for key, value in document.metadata.items() if value is not None
         }
         cleaned.append(document)
     return cleaned
@@ -123,9 +121,7 @@ def main():
     print(f"vector count: {count}")
     print(f"persisted at: {PERSIST_DIR}")
 
-    results = vectorstore.similarity_search(
-        "12개월 정기예금 중 금리가 높은 상품", k=3
-    )
+    results = vectorstore.similarity_search("12개월 정기예금 중 금리가 높은 상품", k=3)
     print()
     print("[sample search]")
     for index, result in enumerate(results, start=1):

@@ -16,12 +16,15 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 from langchain_core.documents import Document
 
+from config import PROCESSED_DATA_DIR
+from models import Product, ProductOption
 
 # `process_products.py`가 생성한 정제 상품 데이터 파일 경로.
-PRODUCTS_PATH = Path("data/processed/products.json")
+PRODUCTS_PATH = PROCESSED_DATA_DIR / "products.json"
 
 # 내부 product_type 값을 사용자에게 보여줄 한국어 상품 유형명으로 변환한다.
 PRODUCT_TYPE_NAMES = {
@@ -30,7 +33,7 @@ PRODUCT_TYPE_NAMES = {
 }
 
 
-def read_products(path=PRODUCTS_PATH):
+def read_products(path: Path = PRODUCTS_PATH) -> list[Product]:
     """
     정제된 상품 JSON 파일을 읽어 상품 목록을 반환한다.
 
@@ -40,7 +43,7 @@ def read_products(path=PRODUCTS_PATH):
     Returns:
         list[dict]: 정규화된 예금/적금 상품 정보 목록.
     """
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(list[Product], json.loads(path.read_text(encoding="utf-8")))
 
 
 def format_rate(value):
@@ -58,7 +61,7 @@ def format_rate(value):
     return f"{value}%"
 
 
-def format_options(options):
+def format_options(options: list[ProductOption]) -> str:
     """
     상품의 금리 옵션 목록을 검색 가능한 여러 줄 텍스트로 변환한다.
 
@@ -94,7 +97,7 @@ def format_options(options):
     return "\n".join(lines) if lines else "금리 옵션 정보 없음"
 
 
-def max_option_rate(options):
+def max_option_rate(options: list[ProductOption]) -> float | None:
     """
     상품의 금리 옵션 중 가장 높은 최고우대금리를 찾는다.
 
@@ -116,7 +119,7 @@ def max_option_rate(options):
     return max(rates, default=None)
 
 
-def product_terms(options):
+def product_terms(options: list[ProductOption]) -> list[int]:
     """
     상품이 제공하는 저축 기간 목록을 중복 없이 정렬해 반환한다.
 
@@ -134,7 +137,7 @@ def product_terms(options):
     return sorted(set(terms))
 
 
-def product_to_document(product):
+def product_to_document(product: Product) -> Document:
     """
     정규화된 상품 하나를 LangChain Document 하나로 변환한다.
 
@@ -231,7 +234,7 @@ def product_to_document(product):
     )
 
 
-def build_documents(products):
+def build_documents(products: list[Product]) -> list[Document]:
     """
     상품 목록 전체를 LangChain Document 목록으로 변환한다.
 

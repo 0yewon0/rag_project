@@ -7,19 +7,26 @@
 
 import logging
 import uuid
+from collections import OrderedDict
 from contextlib import asynccontextmanager
+from threading import Lock
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAIError
 from pydantic import BaseModel
 
 from build_documents import read_products
-from config import load_env, require_openai_key
-from graph_chat import build_graph, initial_state, run_turn
+from config import STATIC_DIR, load_env, require_openai_key
+from graph_chat import (
+    ChatState,
+    build_graph,
+    create_chat_model,
+    initial_state,
+    run_turn,
+)
 from vectorstore import load_vectorstore
-
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +53,53 @@ class ChatResponse(BaseModel):
     mobile_join_preferred: bool | None
 
 
-# 로컬 개발용 세션 저장소. 서버를 재시작하면 모든 대화가 초기화된다.
-SESSIONS = {}
+class SessionStore:
+    """세션별 대화 상태를 크기 제한이 있는 메모리 저장소에 보관한다."""
 
-# 서버 시작 시 상품 데이터와 벡터스토어를 연결해 한 번만 컴파일한다.
-GRAPH_APP = None
+    def __init__(self, max_sessions: int = 1_000):
+        """저장 가능한 최대 세션 수와 동시 요청용 잠금을 준비한다.
+
+        Args:
+            max_sessions (int): 보관할 최대 세션 수. 초과하면 가장 오래 사용하지
+                않은 세션부터 제거한다.
+        """
+        if max_sessions < 1:
+            raise ValueError("max_sessions must be at least 1")
+        self.max_sessions = max_sessions
+        self._states: OrderedDict[str, ChatState] = OrderedDict()
+        self._lock = Lock()
+
+    def get_or_create(self, session_id: str) -> ChatState:
+        """세션 상태를 가져오고, 없으면 빈 상태를 생성한다."""
+        with self._lock:
+            state = self._states.pop(session_id, None)
+            if state is None:
+                state = initial_state()
+            self._states[session_id] = state
+            self._evict_oldest()
+            return state
+
+    def set(self, session_id: str, state: ChatState) -> None:
+        """세션 상태를 저장하고 용량을 넘으면 가장 오래된 세션을 제거한다."""
+        with self._lock:
+            self._states.pop(session_id, None)
+            self._states[session_id] = state
+            self._evict_oldest()
+
+    def delete(self, session_id: str) -> None:
+        """지정한 세션이 있으면 저장소에서 제거한다."""
+        with self._lock:
+            self._states.pop(session_id, None)
+
+    def __len__(self) -> int:
+        """현재 저장된 세션 수를 반환한다."""
+        with self._lock:
+            return len(self._states)
+
+    def _evict_oldest(self) -> None:
+        """용량을 넘긴 가장 오래 사용하지 않은 세션을 제거한다."""
+        while len(self._states) > self.max_sessions:
+            self._states.popitem(last=False)
 
 
 def bot_reply(state):
@@ -79,19 +128,23 @@ async def lifespan(_app: FastAPI):
     Yields:
         None: 초기화가 끝난 뒤 FastAPI가 요청을 처리하도록 제어권을 넘긴다.
     """
-    global GRAPH_APP
-
     load_env()
     require_openai_key()
     products = read_products()
     vectorstore = load_vectorstore()
-    GRAPH_APP = build_graph(products, vectorstore)
+    llm = create_chat_model()
+    _app.state.graph_app = build_graph(products, vectorstore, llm)
+    _app.state.sessions = SessionStore()
 
-    yield
+    try:
+        yield
+    finally:
+        _app.state.graph_app = None
+        _app.state.sessions = None
 
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/")
@@ -101,15 +154,16 @@ def index():
     Returns:
         FileResponse: `static/index.html` 파일 응답.
     """
-    return FileResponse("static/index.html")
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+def chat(payload: ChatRequest, request: Request):
     """사용자 메시지 한 건을 LangGraph에 전달하고 새 상태를 반환한다.
 
     Args:
-        request (ChatRequest): 사용자 메시지와 선택적 세션 ID.
+        payload (ChatRequest): 사용자 메시지와 선택적 세션 ID.
+        request (Request): 그래프와 세션 저장소를 가진 FastAPI 요청.
 
     Returns:
         ChatResponse: 챗봇 답변, 세션 ID와 현재 추천 조건.
@@ -117,18 +171,20 @@ def chat(request: ChatRequest):
     Raises:
         HTTPException: 빈 메시지, 초기화 실패 또는 OpenAI 연결 오류가 발생할 때.
     """
-    if GRAPH_APP is None:
+    graph_app = getattr(request.app.state, "graph_app", None)
+    sessions = getattr(request.app.state, "sessions", None)
+    if graph_app is None or sessions is None:
         raise HTTPException(status_code=503, detail="챗봇이 아직 준비되지 않았습니다.")
 
-    message = request.message.strip()
+    message = payload.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="메시지를 입력해주세요.")
 
-    session_id = request.session_id or str(uuid.uuid4())
-    state = SESSIONS.get(session_id, initial_state())
+    session_id = payload.session_id or str(uuid.uuid4())
+    state = sessions.get_or_create(session_id)
 
     try:
-        next_state = run_turn(GRAPH_APP, state, message)
+        next_state = run_turn(graph_app, state, message)
     except OpenAIError as exc:
         logger.exception("OpenAI request failed during chat turn")
         raise HTTPException(
@@ -136,7 +192,7 @@ def chat(request: ChatRequest):
             detail="AI 서비스 연결에 실패했습니다. 잠시 후 다시 시도해주세요.",
         ) from exc
 
-    SESSIONS[session_id] = next_state
+    sessions.set(session_id, next_state)
     return ChatResponse(
         answer=bot_reply(next_state),
         session_id=session_id,
@@ -152,15 +208,17 @@ def chat(request: ChatRequest):
 
 
 @app.post("/reset")
-def reset(session_id: str | None = None):
+def reset(request: Request, session_id: str | None = None):
     """지정한 브라우저 세션의 누적 대화 상태를 삭제한다.
 
     Args:
+        request (Request): 세션 저장소를 가진 FastAPI 요청.
         session_id (str | None): 초기화할 세션 ID.
 
     Returns:
         dict[str, bool]: 초기화 요청 처리 여부.
     """
-    if session_id and session_id in SESSIONS:
-        del SESSIONS[session_id]
+    sessions = getattr(request.app.state, "sessions", None)
+    if session_id and sessions is not None:
+        sessions.delete(session_id)
     return {"ok": True}

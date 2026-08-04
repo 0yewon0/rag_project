@@ -8,10 +8,14 @@
 from langchain_core.messages import HumanMessage
 
 from build_documents import product_to_document
+from models import Product, ProductOption
 from preferences import PRODUCT_TYPE_NAMES, RATE_PREFERENCE_NAMES
 
 
-def option_rate(option, rate_preference):
+def option_rate(
+    option: ProductOption,
+    rate_preference: str | None,
+) -> float | int:
     """정렬에 사용할 상품 옵션의 대표 금리를 반환한다.
 
     Args:
@@ -27,7 +31,10 @@ def option_rate(option, rate_preference):
     return value if value is not None else -1
 
 
-def matching_options(product, term_months):
+def matching_options(
+    product: Product,
+    term_months: int | None,
+) -> list[ProductOption]:
     """상품 옵션 중 사용자가 원하는 기간과 일치하는 항목을 찾는다.
 
     Args:
@@ -40,14 +47,10 @@ def matching_options(product, term_months):
     options = product.get("options", [])
     if term_months is None:
         return options
-    return [
-        option
-        for option in options
-        if option.get("term_months") == term_months
-    ]
+    return [option for option in options if option.get("term_months") == term_months]
 
 
-def product_matches_user_conditions(product, state):
+def product_matches_user_conditions(product: Product, state: dict) -> bool:
     """상품이 사용자의 가입 가능 조건과 납입액 범위를 만족하는지 확인한다.
 
     Args:
@@ -62,19 +65,16 @@ def product_matches_user_conditions(product, state):
 
     if state.get("card_ok") is False and conditions.get("requires_card"):
         return False
-    if (
-        state.get("salary_transfer_ok") is False
-        and conditions.get("requires_salary_transfer")
+    if state.get("salary_transfer_ok") is False and conditions.get(
+        "requires_salary_transfer"
     ):
         return False
-    if (
-        state.get("auto_transfer_ok") is False
-        and conditions.get("requires_auto_transfer")
+    if state.get("auto_transfer_ok") is False and conditions.get(
+        "requires_auto_transfer"
     ):
         return False
-    if (
-        state.get("mobile_join_preferred") is True
-        and not conditions.get("supports_mobile")
+    if state.get("mobile_join_preferred") is True and not conditions.get(
+        "supports_mobile"
     ):
         return False
 
@@ -151,8 +151,7 @@ def format_context(documents):
     for index, document in enumerate(documents, start=1):
         metadata = document.metadata
         title = (
-            f"{metadata.get('bank_name', '')} "
-            f"{metadata.get('product_name', '')}"
+            f"{metadata.get('bank_name', '')} {metadata.get('product_name', '')}"
         ).strip()
         max_rate = metadata.get("max_rate")
         max_rate_text = f"{max_rate}%" if max_rate is not None else "정보 없음"
@@ -169,7 +168,12 @@ def format_context(documents):
     return "\n\n---\n\n".join(blocks)
 
 
-def retrieve_products(state, products, vectorstore, k=5):
+def retrieve_products(
+    state,
+    products: list[Product],
+    vectorstore,
+    k=5,
+):
     """구조화 조건과 Chroma 검색 순위로 추천할 상품 문서를 고른다.
 
     Args:
@@ -228,10 +232,7 @@ def retrieve_products(state, products, vectorstore, k=5):
         ),
         reverse=True,
     )
-    documents = [
-        product_to_document(product)
-        for _, product in candidates[:k]
-    ]
+    documents = [product_to_document(product) for _, product in candidates[:k]]
 
     return {
         **state,

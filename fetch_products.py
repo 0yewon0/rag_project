@@ -7,21 +7,16 @@
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from config import load_env, require_env
-
+from config import RAW_DATA_DIR, load_env, require_env
 
 # 금융감독원 금융상품 API의 공통 기본 주소.
 BASE_URL = "https://finlife.fss.or.kr/finlifeapi"
 
 # 은행권 금융회사를 나타내는 금융회사 권역 코드.
 TOP_FIN_GRP_NO = "020000"
-
-# 수집한 원천 JSON 파일을 저장할 디렉터리.
-RAW_DATA_DIR = Path("data/raw")
 
 # 내부 상품 유형과 금융감독원 API endpoint의 매핑.
 PRODUCT_ENDPOINTS = {

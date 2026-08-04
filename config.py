@@ -7,9 +7,18 @@
 import os
 from pathlib import Path
 
+# 이 파일이 있는 프로젝트 루트를 모든 로컬 경로의 기준으로 사용한다.
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+RAW_DATA_DIR = DATA_DIR / "raw"
+PROCESSED_DATA_DIR = DATA_DIR / "processed"
+STATIC_DIR = BASE_DIR / "static"
 
 # Chroma 벡터스토어 파일이 저장되는 로컬 디렉터리.
-PERSIST_DIR = Path("data/chroma")
+PERSIST_DIR = DATA_DIR / "chroma"
+
+# 프로젝트 루트의 기본 환경 변수 파일.
+ENV_PATH = BASE_DIR / ".env"
 
 # 금융상품 문서를 저장하고 검색할 Chroma 컬렉션 이름.
 COLLECTION_NAME = "financial_products"
@@ -21,7 +30,7 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_CHAT_MODEL = "gpt-4.1-mini"
 
 
-def load_env(path=".env"):
+def load_env(path=ENV_PATH):
     """`.env` 값을 기존 환경 변수를 덮어쓰지 않고 등록한다.
 
     Args:
@@ -34,6 +43,8 @@ def load_env(path=".env"):
         운영 환경에서 이미 주입된 값을 우선하기 위해 `setdefault()`를 사용한다.
     """
     env_path = Path(path)
+    if not env_path.is_absolute():
+        env_path = BASE_DIR / env_path
     if not env_path.exists():
         return
 

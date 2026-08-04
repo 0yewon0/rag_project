@@ -9,7 +9,6 @@ import re
 
 from langchain_core.messages import HumanMessage
 
-
 PRODUCT_TYPE_NAMES = {
     "deposit": "정기예금",
     "saving": "적금",
@@ -45,9 +44,28 @@ def parse_product_type(text):
     Returns:
         str | None: `deposit`, `saving` 또는 상품 유형이 없으면 None.
     """
-    if "적금" in text:
+    deposit_pattern = r"(?:정기예금|예금)"
+    saving_pattern = r"적금"
+    exclusion = r"(?:말고|아니고|아니라)"
+
+    if re.search(
+        rf"{saving_pattern}.{{0,12}}?{exclusion}.{{0,12}}?{deposit_pattern}",
+        text,
+    ):
+        return "deposit"
+    if re.search(
+        rf"{deposit_pattern}.{{0,12}}?{exclusion}.{{0,12}}?{saving_pattern}",
+        text,
+    ):
         return "saving"
-    if "정기예금" in text or "예금" in text:
+
+    has_deposit = re.search(deposit_pattern, text) is not None
+    has_saving = re.search(saving_pattern, text) is not None
+    if has_deposit == has_saving:
+        return None
+    if has_saving:
+        return "saving"
+    if has_deposit:
         return "deposit"
     return None
 
@@ -81,10 +99,15 @@ def parse_rate_preference(text):
     Returns:
         str | None: `base_rate`, `max_rate` 또는 기준이 없으면 None.
     """
-    if "최고" in text or "우대" in text or "높" in text:
-        return "max_rate"
-    if "기본" in text:
+    has_base_rate = "기본" in text
+    has_max_rate = "최고" in text or "우대" in text
+
+    if has_base_rate and has_max_rate:
+        return None
+    if has_base_rate:
         return "base_rate"
+    if has_max_rate or "높" in text:
+        return "max_rate"
     return None
 
 
@@ -120,7 +143,7 @@ def parse_monthly_amount(text):
         int | None: 원 단위 월 납입액. 해당 표현이 없으면 None.
     """
     match = re.search(
-        r"(?:월|매달|매월)[^\d]{0,10}(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+        r"(?:매달|매월|월(?!급))[^\d]{0,10}(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
         r"(억|천만|백만|만|천)?\s*원?",
         text,
     )
@@ -212,9 +235,28 @@ def parse_mobile_join_preferred(text):
     Returns:
         bool | None: 모바일 선호는 True, 방문 선호는 False, 언급이 없으면 None.
     """
-    if any(word in text for word in ["모바일", "스마트폰", "앱"]):
+    mobile_pattern = r"(?:모바일|스마트폰|앱)"
+    branch_pattern = r"(?:영업점|방문)"
+    exclusion = r"(?:말고|아니고|아니라)"
+
+    if re.search(
+        rf"{mobile_pattern}.{{0,12}}?{exclusion}.{{0,12}}?{branch_pattern}",
+        text,
+    ):
+        return False
+    if re.search(
+        rf"{branch_pattern}.{{0,12}}?{exclusion}.{{0,12}}?{mobile_pattern}",
+        text,
+    ):
         return True
-    if "영업점" in text or "방문" in text:
+
+    has_mobile = re.search(mobile_pattern, text) is not None
+    has_branch = re.search(branch_pattern, text) is not None
+    if has_mobile == has_branch:
+        return None
+    if has_mobile:
+        return True
+    if has_branch:
         return False
     return None
 
@@ -253,9 +295,7 @@ def extract_preferences(state):
         "rate_preference": (
             parse_rate_preference(text) or state.get("rate_preference")
         ),
-        "monthly_amount": (
-            parse_monthly_amount(text) or state.get("monthly_amount")
-        ),
+        "monthly_amount": (parse_monthly_amount(text) or state.get("monthly_amount")),
         "card_ok": coalesce(parse_card_ok(text), state.get("card_ok")),
         "salary_transfer_ok": coalesce(
             parse_salary_transfer_ok(text),
