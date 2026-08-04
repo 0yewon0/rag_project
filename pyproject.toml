@@ -1,7 +1,7 @@
 [project]
 name = "rag-project"
 version = "0.1.0"
-description = "Add your description here"
+description = "LangGraph-based RAG chatbot for Korean financial products"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,4 +11,5 @@ dependencies = [
     "langchain-core>=1.5.3",
     "langchain-openai>=1.4.1",
     "langgraph>=1.2.10",
+    "openai>=2.51.0",
 ]

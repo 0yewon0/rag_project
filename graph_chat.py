@@ -1,8 +1,15 @@
+"""LangGraph로 금융상품 추천 대화의 상태와 실행 순서를 관리한다.
+
+조건 추출은 `preferences.py`, 상품 검색은 `retrieval.py`에 맡긴다. 이 모듈은
+필수 조건이 부족할 때 추가 질문을 하고, 조건이 모이면 검색과 답변 생성을
+차례로 실행하는 그래프를 구성한다. 콘솔에서 멀티턴 챗봇을 실행하는 진입점도
+함께 제공한다.
+"""
+
 import argparse
 import json
 import os
-import re
-from pathlib import Path
+from functools import partial
 from typing import Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -10,16 +17,20 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
-from build_documents import product_to_document, read_products
-from chat import (
-    DEFAULT_CHAT_MODEL,
-    format_context,
-    load_env,
-    require_openai_key,
+from build_documents import read_products
+from config import DEFAULT_CHAT_MODEL, load_env, require_openai_key
+from preferences import (
+    PRODUCT_TYPE_NAMES,
+    RATE_PREFERENCE_NAMES,
+    extract_preferences,
 )
+from retrieval import retrieve_products
+from vectorstore import load_vectorstore
 
 
 class ChatState(TypedDict):
+    """LangGraph의 각 노드가 읽고 갱신하는 금융상품 대화 상태."""
+
     messages: list[BaseMessage]
     product_type: str | None
     term_months: int | None
@@ -34,164 +45,16 @@ class ChatState(TypedDict):
     answer: str | None
 
 
-PRODUCT_TYPE_NAMES = {
-    "deposit": "정기예금",
-    "saving": "적금",
-}
-
-PRODUCTS = []
-
-
-def last_human_text(messages):
-    for message in reversed(messages):
-        if isinstance(message, HumanMessage):
-            return message.content
-    return ""
-
-
-def parse_product_type(text):
-    if "적금" in text:
-        return "saving"
-    if "정기예금" in text or "예금" in text:
-        return "deposit"
-    return None
-
-
-def parse_term_months(text):
-    month_match = re.search(r"(\d+)\s*개월", text)
-    if month_match:
-        return int(month_match.group(1))
-
-    year_match = re.search(r"(\d+)\s*년", text)
-    if year_match:
-        return int(year_match.group(1)) * 12
-
-    return None
-
-
-def parse_rate_preference(text):
-    if "최고" in text or "우대" in text or "높" in text:
-        return "max_rate"
-    if "기본" in text:
-        return "base_rate"
-    return None
-
-
-def parse_korean_amount(value, unit):
-    amount = float(value.replace(",", ""))
-    if unit == "억":
-        amount *= 100_000_000
-    elif unit == "천만":
-        amount *= 10_000_000
-    elif unit == "백만":
-        amount *= 1_000_000
-    elif unit == "만":
-        amount *= 10_000
-    elif unit == "천":
-        amount *= 1_000
-    return int(amount)
-
-
-def parse_monthly_amount(text):
-    match = re.search(
-        r"(?:월|매달|매월)[^\d]{0,10}(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
-        r"(억|천만|백만|만|천)?\s*원?",
-        text,
-    )
-    if not match:
-        return None
-
-    unit = match.group(2) or ""
-    return parse_korean_amount(match.group(1), unit)
-
-
-def parse_boolean_preference(text, positive_words, negative_words):
-    if any(word in text for word in negative_words):
-        return False
-    if any(word in text for word in positive_words):
-        return True
-    return None
-
-
-def parse_card_ok(text):
-    if "카드" not in text:
-        return None
-    return parse_boolean_preference(
-        text,
-        ["가능", "괜찮", "만들", "쓸", "사용"],
-        ["안", "못", "싫", "없이", "노"],
-    )
-
-
-def parse_salary_transfer_ok(text):
-    if "급여" not in text and "월급" not in text:
-        return None
-    return parse_boolean_preference(
-        text,
-        ["가능", "할 수", "해도", "괜찮"],
-        ["안", "못", "없이", "불가", "싫"],
-    )
-
-
-def parse_auto_transfer_ok(text):
-    if "자동이체" not in text:
-        return None
-    return parse_boolean_preference(
-        text,
-        ["가능", "할 수", "해도", "괜찮"],
-        ["안", "못", "없이", "불가", "싫"],
-    )
-
-
-def parse_mobile_join_preferred(text):
-    if any(word in text for word in ["모바일", "스마트폰", "앱"]):
-        return True
-    if "영업점" in text or "방문" in text:
-        return False
-    return None
-
-
-def coalesce(new_value, old_value):
-    return old_value if new_value is None else new_value
-
-
-def extract_preferences(state):
-    text = last_human_text(state["messages"])
-
-    product_type = parse_product_type(text) or state.get("product_type")
-    term_months = parse_term_months(text) or state.get("term_months")
-    rate_preference = parse_rate_preference(text) or state.get("rate_preference")
-    monthly_amount = parse_monthly_amount(text) or state.get("monthly_amount")
-    card_ok = coalesce(parse_card_ok(text), state.get("card_ok"))
-    salary_transfer_ok = coalesce(
-        parse_salary_transfer_ok(text),
-        state.get("salary_transfer_ok"),
-    )
-    auto_transfer_ok = coalesce(
-        parse_auto_transfer_ok(text),
-        state.get("auto_transfer_ok"),
-    )
-    mobile_join_preferred = coalesce(
-        parse_mobile_join_preferred(text),
-        state.get("mobile_join_preferred"),
-    )
-
-    return {
-        **state,
-        "product_type": product_type,
-        "term_months": term_months,
-        "rate_preference": rate_preference,
-        "monthly_amount": monthly_amount,
-        "card_ok": card_ok,
-        "salary_transfer_ok": salary_transfer_ok,
-        "auto_transfer_ok": auto_transfer_ok,
-        "mobile_join_preferred": mobile_join_preferred,
-        "pending_question": None,
-        "answer": None,
-    }
-
-
 def ask_missing_info(state):
+    """추천에 필요한 필수 조건 중 가장 먼저 비어 있는 값을 질문한다.
+
+    Args:
+        state (ChatState): 조건 추출이 끝난 현재 대화 상태.
+
+    Returns:
+        ChatState: 추가 질문과 `pending_question`이 반영된 상태. 모든 필수
+        조건이 있으면 입력 상태를 그대로 반환한다.
+    """
     if not state.get("product_type"):
         question = "정기예금과 적금 중 어떤 상품을 찾으세요?"
     elif not state.get("term_months"):
@@ -212,98 +75,31 @@ def ask_missing_info(state):
 
 
 def route_after_missing_check(state) -> Literal["retrieve", "end"]:
+    """추가 질문 여부에 따라 검색 단계 또는 현재 턴 종료로 분기한다.
+
+    Args:
+        state (ChatState): 필수 조건 확인을 마친 상태.
+
+    Returns:
+        Literal["retrieve", "end"]: 검색을 계속할지 현재 턴을 끝낼지 나타내는 값.
+    """
     if state.get("pending_question"):
         return "end"
     return "retrieve"
 
 
-def option_rate(option, rate_preference):
-    value = option.get(rate_preference or "max_rate")
-    if value is None:
-        value = option.get("max_rate") or option.get("base_rate")
-    return value if value is not None else -1
-
-
-def matching_options(product, term_months):
-    options = product.get("options", [])
-    if term_months is None:
-        return options
-    return [
-        option
-        for option in options
-        if option.get("term_months") == term_months
-    ]
-
-
-def product_matches_user_conditions(product, state):
-    conditions = product.get("conditions", {})
-    monthly_amount = state.get("monthly_amount")
-
-    if state.get("card_ok") is False and conditions.get("requires_card"):
-        return False
-    if (
-        state.get("salary_transfer_ok") is False
-        and conditions.get("requires_salary_transfer")
-    ):
-        return False
-    if (
-        state.get("auto_transfer_ok") is False
-        and conditions.get("requires_auto_transfer")
-    ):
-        return False
-    if (
-        state.get("mobile_join_preferred") is True
-        and not conditions.get("supports_mobile")
-    ):
-        return False
-
-    if monthly_amount is not None:
-        monthly_min = conditions.get("monthly_min_amount")
-        monthly_max = conditions.get("monthly_max_amount")
-        if monthly_min is not None and monthly_amount < monthly_min:
-            return False
-        if monthly_max is not None and monthly_amount > monthly_max:
-            return False
-
-    return True
-
-
-def retrieve_products(state, k=5):
-    candidates = []
-    for product in PRODUCTS:
-        if product.get("product_type") != state.get("product_type"):
-            continue
-        if not product_matches_user_conditions(product, state):
-            continue
-
-        options = matching_options(product, state.get("term_months"))
-        if not options:
-            continue
-
-        best_option = max(
-            options,
-            key=lambda option: option_rate(option, state.get("rate_preference")),
-        )
-        candidates.append(
-            (
-                option_rate(best_option, state.get("rate_preference")),
-                product,
-            )
-        )
-
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    documents = [
-        product_to_document(product)
-        for _, product in candidates[:k]
-    ]
-
-    return {
-        **state,
-        "retrieved_context": format_context(documents),
-    }
-
-
 def generate_answer(state):
+    """검색된 상품 context와 사용자 조건으로 최종 안내 답변을 생성한다.
+
+    Args:
+        state (ChatState): 사용자 조건과 `retrieved_context`가 담긴 상태.
+
+    Returns:
+        ChatState: OpenAI 답변과 AI 메시지가 추가된 상태.
+
+    Notes:
+        모델은 검색 context 밖의 정보를 추측하지 않도록 system prompt로 제한한다.
+    """
     model_name = os.getenv("OPENAI_CHAT_MODEL", DEFAULT_CHAT_MODEL)
     llm = ChatOpenAI(model=model_name, temperature=0.2)
 
@@ -311,45 +107,62 @@ def generate_answer(state):
         state.get("product_type"),
         state.get("product_type") or "상품",
     )
+    rate_preference_name = RATE_PREFERENCE_NAMES.get(
+        state.get("rate_preference"),
+        state.get("rate_preference") or "정보 없음",
+    )
+    user_request = "\n".join(
+        str(message.content)
+        for message in state["messages"]
+        if isinstance(message, HumanMessage)
+    )
 
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """
-너는 예금과 적금 상품을 추천하는 금융상품 안내 챗봇이야.
-반드시 제공된 상품 정보 안에서만 답해.
-사용자의 조건에 맞는 상품만 추천해.
-금리는 기본금리와 최고우대금리를 구분해서 설명해.
-추천 이유와 가입 전 확인할 주의사항을 짧게 포함해.
-최종 가입 전 금융회사 공시와 약관 확인을 안내해.
-""".strip(),
+                "\n".join(
+                    [
+                        "너는 예금과 적금 상품을 추천하는 금융상품 안내 챗봇이야.",
+                        "반드시 제공된 상품 정보 안에서만 답해.",
+                        "사용자의 조건에 맞는 상품만 추천해.",
+                        "금리는 기본금리와 최고우대금리를 구분해서 설명해.",
+                        "추천 이유와 가입 전 확인할 주의사항을 짧게 포함해.",
+                        "최종 가입 전 금융회사 공시와 약관 확인을 안내해.",
+                    ]
+                ),
             ),
             (
                 "human",
-                """
-사용자 조건:
-- 상품유형: {product_type_name}
-- 기간: {term_months}개월
-- 금리 기준: {rate_preference}
-- 월 납입 예정액: {monthly_amount}
-- 카드 조건 가능 여부: {card_ok}
-- 급여이체 가능 여부: {salary_transfer_ok}
-- 자동이체 가능 여부: {auto_transfer_ok}
-- 모바일 가입 선호: {mobile_join_preferred}
-
-검색된 상품 정보:
-{context}
-""".strip(),
+                "\n".join(
+                    [
+                        "사용자 대화:",
+                        "{user_request}",
+                        "",
+                        "추출된 사용자 조건:",
+                        "- 상품유형: {product_type_name}",
+                        "- 기간: {term_months}개월",
+                        "- 금리 기준: {rate_preference}",
+                        "- 월 납입 예정액: {monthly_amount}",
+                        "- 카드 조건 가능 여부: {card_ok}",
+                        "- 급여이체 가능 여부: {salary_transfer_ok}",
+                        "- 자동이체 가능 여부: {auto_transfer_ok}",
+                        "- 모바일 가입 선호: {mobile_join_preferred}",
+                        "",
+                        "검색된 상품 정보:",
+                        "{context}",
+                    ]
+                ),
             ),
         ]
     )
 
     response = (prompt | llm).invoke(
         {
+            "user_request": user_request,
             "product_type_name": product_type_name,
             "term_months": state.get("term_months"),
-            "rate_preference": state.get("rate_preference"),
+            "rate_preference": rate_preference_name,
             "monthly_amount": state.get("monthly_amount") or "정보 없음",
             "card_ok": state.get("card_ok"),
             "salary_transfer_ok": state.get("salary_transfer_ok"),
@@ -366,12 +179,28 @@ def generate_answer(state):
     }
 
 
-def build_graph():
+def build_graph(products, vectorstore):
+    """상품 데이터와 벡터스토어가 연결된 LangGraph 앱을 생성한다.
+
+    Args:
+        products (list[dict]): 정제된 금융상품 목록.
+        vectorstore (Chroma): 의미 검색에 사용할 금융상품 벡터스토어.
+
+    Returns:
+        CompiledStateGraph: 대화 턴을 실행할 수 있도록 컴파일된 그래프.
+    """
     graph = StateGraph(ChatState)
 
     graph.add_node("extract_preferences", extract_preferences)
     graph.add_node("ask_missing_info", ask_missing_info)
-    graph.add_node("retrieve_products", retrieve_products)
+    graph.add_node(
+        "retrieve_products",
+        partial(
+            retrieve_products,
+            products=products,
+            vectorstore=vectorstore,
+        ),
+    )
     graph.add_node("generate_answer", generate_answer)
 
     graph.set_entry_point("extract_preferences")
@@ -391,6 +220,11 @@ def build_graph():
 
 
 def initial_state():
+    """새 대화를 시작할 때 사용할 빈 LangGraph 상태를 만든다.
+
+    Returns:
+        ChatState: 메시지와 모든 추천 조건이 초기화된 상태.
+    """
     return {
         "messages": [],
         "product_type": None,
@@ -408,6 +242,16 @@ def initial_state():
 
 
 def run_turn(app, state, user_text):
+    """사용자 발화 하나를 현재 상태에 추가하고 그래프를 실행한다.
+
+    Args:
+        app (CompiledStateGraph): `build_graph()`가 만든 실행 가능한 그래프.
+        state (ChatState): 직전 대화 턴까지 누적된 상태.
+        user_text (str): 새로 입력된 사용자 발화.
+
+    Returns:
+        ChatState: 이번 대화 턴의 모든 노드 실행이 끝난 상태.
+    """
     next_state = {
         **state,
         "messages": state["messages"] + [HumanMessage(content=user_text)],
@@ -416,6 +260,14 @@ def run_turn(app, state, user_text):
 
 
 def print_bot_reply(state):
+    """현재 상태에서 사용자에게 보여줄 질문 또는 답변을 출력한다.
+
+    Args:
+        state (ChatState): 그래프 실행이 끝난 현재 상태.
+
+    Returns:
+        None
+    """
     if state.get("pending_question"):
         print(state["pending_question"])
     elif state.get("answer"):
@@ -424,9 +276,18 @@ def print_bot_reply(state):
         print("답변을 생성하지 못했습니다.")
 
 
-def run_scripted(app, question):
+def run_scripted(app, turns):
+    """미리 준비된 사용자 발화 목록으로 멀티턴 대화를 실행한다.
+
+    Args:
+        app (CompiledStateGraph): 실행할 LangGraph 앱.
+        turns (list[str]): 순서대로 입력할 사용자 발화 목록.
+
+    Returns:
+        None
+    """
     state = initial_state()
-    for user_text in question:
+    for user_text in turns:
         print(f"User> {user_text}")
         state = run_turn(app, state, user_text)
         print("Bot>")
@@ -435,10 +296,24 @@ def run_scripted(app, question):
 
 
 def main():
+    """환경과 검색 자원을 준비하고 LangGraph 콘솔 챗봇을 실행한다.
+
+    Returns:
+        None
+
+    CLI Args:
+        --turns: JSON 배열로 전달한 여러 사용자 발화를 순서대로 실행한다.
+        --question: 사용자 발화 하나를 실행하고 종료한다.
+        --demo: 프로젝트에 포함된 예시 멀티턴 대화를 실행한다.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--turns",
         help="JSON array of user turns for a smoke test.",
+    )
+    parser.add_argument(
+        "--question",
+        help="Run one user turn and exit. Include all required conditions.",
     )
     parser.add_argument(
         "--demo",
@@ -449,11 +324,9 @@ def main():
 
     load_env()
     require_openai_key()
-
-    global PRODUCTS
-    PRODUCTS = read_products()
-
-    app = build_graph()
+    products = read_products()
+    vectorstore = load_vectorstore()
+    app = build_graph(products, vectorstore)
 
     if args.demo:
         run_scripted(app, ["상품 추천해줘", "적금", "12개월", "최고우대금리"])
@@ -461,6 +334,10 @@ def main():
 
     if args.turns:
         run_scripted(app, json.loads(args.turns))
+        return
+
+    if args.question:
+        run_scripted(app, [args.question])
         return
 
     state = initial_state()

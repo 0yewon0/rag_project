@@ -11,21 +11,29 @@
 - 가입 조건, 우대 조건, 모바일 가입 가능 여부 등 추천용 정보 추출
 - LangChain `Document` 생성
 - OpenAI 임베딩 기반 Chroma 벡터스토어 생성
-- 콘솔 챗봇 실행
+- 구조화 조건 필터와 의미 검색을 결합한 상품 검색
 - LangGraph 기반 멀티턴 추천 흐름
 - FastAPI 웹 챗봇 제공
+- 조건 추출과 검색 로직 단위 테스트
 
 ## 프로젝트 구조
 
 ```text
 .
-├── main.py                  # 금융감독원 API에서 상품 데이터를 조회하는 스크립트
+├── fetch_products.py        # 금융감독원 API 데이터를 data/raw에 저장
 ├── process_products.py      # 원천 JSON을 챗봇용 정제 데이터로 변환
 ├── build_documents.py       # 정제 상품 데이터를 LangChain Document로 변환
 ├── build_vectorstore.py     # Document를 임베딩해 Chroma 벡터스토어 생성
-├── chat.py                  # 기본 RAG 콘솔 챗봇
-├── graph_chat.py            # LangGraph 기반 멀티턴 챗봇
+├── config.py                # 환경 변수와 OpenAI/Chroma 공통 설정
+├── vectorstore.py           # 기존 Chroma 벡터스토어 연결
+├── preferences.py           # 사용자 대화에서 추천 조건 추출
+├── retrieval.py             # 상품 필터, 금리 정렬과 의미 검색
+├── graph_chat.py            # LangGraph 상태, 노드 연결과 답변 생성
 ├── app.py                   # FastAPI 웹 서버
+├── tests/
+│   ├── test_app.py          # 웹 API 오류 처리 테스트
+│   ├── test_preferences.py  # 추천 조건 추출 테스트
+│   └── test_retrieval.py    # 상품 검색과 정렬 테스트
 ├── static/
 │   ├── index.html           # 웹 화면 구조
 │   ├── app.js               # 채팅 요청/응답 처리
@@ -41,15 +49,21 @@
 ## 데이터 흐름
 
 ```text
-금융감독원 원천 데이터
-→ data/raw/*.json
+금융감독원 금융상품 API
+→ fetch_products.py
+→ data/raw/*_products.json
 → process_products.py
 → data/processed/products.json
 → build_documents.py
 → LangChain Document
 → build_vectorstore.py
 → data/chroma
-→ chat.py 또는 graph_chat.py 또는 app.py
+
+사용자 대화
+→ preferences.py 조건 추출
+→ retrieval.py 구조화 필터 + Chroma 의미 검색
+→ graph_chat.py 답변 생성
+→ 콘솔 또는 app.py 웹
 ```
 
 ## 환경 변수
@@ -74,6 +88,22 @@ https://www.fss.or.kr/fss/main/contents.do?menuNo=200008
 
 ```bash
 uv sync
+```
+
+## 원천 데이터 수집
+
+금융감독원 API에서 예금과 적금 상품의 모든 페이지를 조회해 `data/raw`에
+저장합니다.
+
+```bash
+uv run python fetch_products.py
+```
+
+생성 결과:
+
+```text
+data/raw/deposit_products.json
+data/raw/saving_products.json
 ```
 
 ## 데이터 전처리
@@ -108,24 +138,16 @@ data/chroma
 
 ## 콘솔 챗봇 실행
 
-기본 RAG 챗봇을 콘솔에서 실행합니다.
+LangGraph 기반 RAG 챗봇을 콘솔에서 실행합니다.
 
 ```bash
-uv run python chat.py
+uv run python graph_chat.py
 ```
 
 질문 하나만 테스트하려면 다음처럼 실행할 수 있습니다.
 
 ```bash
-uv run python chat.py --question "12개월 정기예금 중 금리가 높은 상품 추천해줘"
-```
-
-## LangGraph 챗봇 실행
-
-멀티턴 조건 수집 흐름을 콘솔에서 실행합니다.
-
-```bash
-uv run python graph_chat.py
+uv run python graph_chat.py --question "12개월 정기예금 중 금리가 높은 상품 추천해줘"
 ```
 
 데모 대화를 실행하려면 다음 명령을 사용합니다.
@@ -148,12 +170,25 @@ uv run fastapi dev app.py
 http://127.0.0.1:8000
 ```
 
+OpenAI API 연결에 실패하면 서버는 `503 Service Unavailable`과 재시도 안내를
+반환합니다. 대화 상태는 개발 서버 메모리에 저장되므로 서버를 재시작하면
+초기화됩니다.
+
+## 테스트
+
+조건 추출, 상품 검색과 웹 API 오류 처리는 외부 API를 호출하지 않고 테스트할 수
+있습니다.
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
 ## 주요 파일 설명
 
-### `main.py`
+### `fetch_products.py`
 
-금융감독원 API에서 정기예금과 적금 상품 데이터를 조회하는 스크립트입니다.
-현재는 조회 결과의 개수와 첫 번째 상품 샘플을 출력해 API 응답 구조를 확인하는 용도로 사용합니다.
+금융감독원 API에서 정기예금과 적금의 상품 정보와 금리 옵션을 모든 페이지에서
+조회하고, `process_products.py`가 읽을 수 있는 JSON 구조로 `data/raw`에 저장합니다.
 
 ### `process_products.py`
 
@@ -170,20 +205,33 @@ http://127.0.0.1:8000
 LangChain `Document`를 OpenAI 임베딩 모델로 벡터화해 로컬 Chroma 벡터스토어에 저장합니다.
 챗봇이 사용자 질문과 관련 있는 상품 정보를 검색할 때 이 인덱스를 사용합니다.
 
-### `chat.py`
+### `config.py`와 `vectorstore.py`
 
-기본 RAG 챗봇입니다.
-사용자 질문에서 상품 유형과 기간을 간단히 추론하고, 구조화된 상품 정렬 또는 Chroma 유사도 검색으로 관련 문서를 찾은 뒤 LLM 답변을 생성합니다.
+`config.py`는 환경 변수 로딩과 모델명, Chroma 경로 같은 공통 설정을 관리합니다.
+`vectorstore.py`는 OpenAI 임베딩 모델을 사용해 기존 Chroma 컬렉션에 연결합니다.
+
+### `preferences.py`
+
+최근 사용자 발화에서 상품 유형, 기간, 금리 기준, 월 납입액과 우대조건 수용
+여부를 추출하고 이전 대화 상태와 병합합니다.
+
+### `retrieval.py`
+
+상품 유형, 기간, 납입액과 가입 조건을 정확하게 필터링합니다. 선택한 금리로
+상품을 우선 정렬하고, 금리가 같으면 Chroma 의미 검색 순위를 보조 기준으로
+사용해 LLM에 전달할 상품 context를 만듭니다.
 
 ### `graph_chat.py`
 
 LangGraph 기반 멀티턴 챗봇입니다.
-상품 유형, 기간, 금리 기준처럼 필수 조건이 부족하면 추가 질문을 하고, 조건이 모이면 상품을 검색해 답변을 생성합니다.
+필수 조건이 부족하면 추가 질문을 하고, 조건이 모이면 검색 노드와 OpenAI 답변
+생성 노드를 순서대로 실행합니다. 콘솔 실행 진입점도 이 파일에 있습니다.
 
 ### `app.py`
 
 FastAPI 웹 서버입니다.
-브라우저에서 들어온 채팅 요청을 LangGraph 챗봇에 전달하고, 세션별 대화 상태와 추출된 조건을 응답으로 반환합니다.
+브라우저 요청을 LangGraph 챗봇에 전달하고 세션별 대화 상태와 추출 조건을
+응답으로 반환합니다. OpenAI 연결 오류는 사용자용 HTTP 503 응답으로 변환합니다.
 
 ## 참고
 

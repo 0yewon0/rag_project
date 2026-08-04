@@ -14,53 +14,19 @@ LangChain Document를 임베딩해 로컬 Chroma 벡터스토어를 생성한다
 """
 
 import argparse
-import os
 import shutil
-from pathlib import Path
 
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 
 from build_documents import build_documents, read_products
-
-
-# Chroma 벡터스토어 파일이 저장될 로컬 디렉터리.
-PERSIST_DIR = Path("data/chroma")
-
-# Chroma 안에서 금융상품 문서를 구분하는 컬렉션 이름.
-COLLECTION_NAME = "financial_products"
-
-# 금융상품 문서를 벡터로 변환할 OpenAI 임베딩 모델 이름.
-EMBEDDING_MODEL = "text-embedding-3-small"
-
-
-def load_env(path=".env"):
-    """
-    `.env` 파일의 key=value 값을 환경 변수로 등록한다.
-
-    Args:
-        path (str | Path): 읽을 `.env` 파일 경로.
-
-    Returns:
-        None
-
-    Notes:
-        이미 같은 이름의 환경 변수가 있으면 덮어쓰지 않는다. 개발 환경에서는
-        `.env` 파일을 쓰고, 배포 환경에서는 시스템 환경 변수를 그대로 쓰기 위함이다.
-    """
-    env_path = Path(path)
-    if not env_path.exists():
-        return
-
-    for line in env_path.read_text(encoding="utf-8-sig").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
+from config import (
+    COLLECTION_NAME,
+    EMBEDDING_MODEL,
+    PERSIST_DIR,
+    load_env,
+    require_openai_key,
+)
 
 
 def clean_metadata(documents):
@@ -108,9 +74,7 @@ def build_vectorstore(reset=False):
         상품 데이터나 문서 생성 로직이 바뀌면 `reset=True`로 다시 생성하는 것이 좋다.
     """
     load_env()
-
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY is missing in .env")
+    require_openai_key()
 
     if reset and PERSIST_DIR.exists():
         shutil.rmtree(PERSIST_DIR)
