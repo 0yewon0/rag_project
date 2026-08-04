@@ -20,7 +20,6 @@ import argparse
 import os
 import re
 from pathlib import Path
-from textwrap import dedent
 
 from langchain_chroma import Chroma
 from langchain_core.prompts import ChatPromptTemplate
@@ -289,26 +288,37 @@ def answer_question(question, vectorstore, products, k=6):
         [
             (
                 "system",
-                dedent(
-                    """
-                너는 예금과 적금 상품을 추천하는 금융상품 안내 챗봇이야.
-                반드시 제공된 상품 정보 안에서만 답해.
-                모르는 내용은 추측하지 말고 "제공된 데이터에서는 확인할 수 없습니다"라고 말해.
-                금리는 기본금리와 최고우대금리를 구분해서 설명해.
-                추천할 때는 상품명, 금융회사, 기간, 금리, 가입방법, 주의사항을 간단히 포함해.
-                가입을 확정하라고 말하지 말고, 최종 가입 전 금융회사 공시와 약관 확인을 안내해.
-                    """
+                "\n".join(
+                    [
+                        "너는 예금과 적금 상품을 추천하는 금융상품 안내 챗봇이야.",
+                        "반드시 제공된 상품 정보 안에서만 답해.",
+                        (
+                            '모르는 내용은 추측하지 말고 '
+                            '"제공된 데이터에서는 확인할 수 없습니다"라고 말해.'
+                        ),
+                        "금리는 기본금리와 최고우대금리를 구분해서 설명해.",
+                        (
+                            "추천할 때는 상품명, 금융회사, 기간, 금리, "
+                            "가입방법, 주의사항을 간단히 포함해."
+                        ),
+                        (
+                            "가입을 확정하라고 말하지 말고, "
+                            "최종 가입 전 금융회사 공시와 약관 확인을 안내해."
+                        ),
+                    ]
                 ).strip(),
             ),
             (
                 "human",
-                """
-사용자 질문:
-{question}
-
-검색된 상품 정보:
-{context}
-""".strip(),
+                "\n".join(
+                    [
+                        "사용자 질문:",
+                        "{question}",
+                        "",
+                        "검색된 상품 정보:",
+                        "{context}",
+                    ]
+                ).strip(),
             ),
         ]
     )
