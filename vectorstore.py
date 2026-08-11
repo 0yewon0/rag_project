@@ -1,8 +1,10 @@
-"""금융상품 문서를 저장한 로컬 Chroma 벡터스토어 연결을 제공한다."""
+"""
+금융상품 문서를 저장한 로컬 Chroma 벡터스토어 연결을 제공한다.
+챗봇을 실행할 때마다 다시 임베딩 할 필요가 없으니까 이미 저장된 걸 불러오는 거다.
+"""
 
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
-
 from config import COLLECTION_NAME, EMBEDDING_MODEL, PERSIST_DIR
 
 

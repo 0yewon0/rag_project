@@ -16,7 +16,10 @@ def option_rate(
     option: ProductOption,
     rate_preference: str | None,
 ) -> float | int:
-    """정렬에 사용할 상품 옵션의 대표 금리를 반환한다.
+    """
+    상품 옵션에서 사용자가 원하는 금리를 가져온다.
+    예를 들어 사용자가 기본금리 기준을 원하면 base_rate를, 
+    최고우대금리 기준을 원하면 max_rate를 사용한다.
 
     Args:
         option (dict): 기간별 기본금리와 최고우대금리가 담긴 옵션.
@@ -139,7 +142,8 @@ def semantic_product_ranks(state, vectorstore, k=20):
 
 
 def format_context(documents):
-    """검색된 Document 목록을 LLM prompt에 전달할 문자열로 변환한다.
+    """
+    최종 후보 상품을 LLM에게 전달할 텍스트로 바꾼다.
 
     Args:
         documents (list[Document]): 검색된 금융상품 문서 목록.
@@ -174,7 +178,10 @@ def retrieve_products(
     vectorstore,
     k=5,
 ):
-    """구조화 조건과 Chroma 검색 순위로 추천할 상품 문서를 고른다.
+    """
+    구조화 조건과 Chroma 검색 순위로 추천할 상품 문서를 고른다.
+    정확해야 하는 금융 조건은 코드로 필터링하고, 
+    자연어적인 관련성을 벡터 검색으로 보완한다.
 
     Args:
         state (dict): 추출된 사용자 조건이 담긴 현재 대화 상태.

@@ -3,6 +3,7 @@
 상품 기본 정보와 금리 옵션을 모든 페이지에서 조회한 뒤 `data/raw` 아래에
 상품 유형별 JSON 파일로 저장한다. 생성된 파일은 `process_products.py`의
 입력으로 사용된다.
+그냥 딱 데이터 수집 파일이라고 생각하면 된다! 그 이상도 이하도 아님.
 """
 
 import json
@@ -33,6 +34,7 @@ def fetch_page(
     finance_cd=None,
 ):
     """금융감독원 상품 API에서 지정한 페이지 하나를 조회한다.
+        API가 한 번에 모든 금융상품을 주는 게 아니라, 여러 페이지로 나눠서 주기 때문!
 
     Args:
         endpoint (str): `.json` 앞에 붙는 금융상품 API endpoint.
@@ -74,6 +76,8 @@ def fetch_all_products(
     finance_cd=None,
 ):
     """endpoint의 모든 페이지를 조회해 상품과 옵션을 하나로 합친다.
+        while true를 돌면서 fetch_page()를 호출하고, max_page_no에 도달하면 break한다.
+        이때 금융감독원 데이터에는 상품 정보와 금리 정보가 따로 존재하기 때문에 두 목록을 다 받아온다.
 
     Args:
         endpoint (str): 조회할 금융상품 API endpoint.
@@ -114,7 +118,8 @@ def build_raw_data(
     top_fin_grp_no=TOP_FIN_GRP_NO,
     finance_cd=None,
 ):
-    """수집 결과를 전처리 스크립트가 기대하는 원천 데이터 구조로 만든다.
+    """API에서 받은 데이터에 언제 가져왔는지, 어떤 endpoint였는지
+        이런 정보를 붙여서 저장할 구조로 만듦
 
     Args:
         endpoint (str): 데이터를 조회한 금융상품 API endpoint.
@@ -137,7 +142,7 @@ def build_raw_data(
 
 
 def save_raw_data(data, path):
-    """수집한 원천 데이터를 UTF-8 JSON 파일로 저장한다.
+    """수집한 원천 데이터(파이썬 딕셔너리)를 UTF-8 JSON 파일로 저장한다.
 
     Args:
         data (dict): `build_raw_data()`가 만든 저장용 데이터.
@@ -155,6 +160,7 @@ def save_raw_data(data, path):
 
 def main():
     """예금과 적금 원천 데이터를 모두 수집해 `data/raw`에 저장한다.
+        예금 API 호출 -> 저장, 적금 API 호출 -> 저장을 반복한다.
 
     Returns:
         None

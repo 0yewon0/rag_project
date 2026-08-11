@@ -7,3 +7,4 @@ data/chroma/
 .obsidian/
 docs/
 server.*.log
+*.log

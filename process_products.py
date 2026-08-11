@@ -359,6 +359,7 @@ def merge_products(
 def main():
     """
     예금/적금 원천 파일을 모두 처리해 `products.json`을 생성한다.
+    이러면 이제 RAG에 넣을 원재료가 준비되는 것!
 
     Returns:
         None

@@ -72,7 +72,9 @@ ANSWER_PROMPT = ChatPromptTemplate.from_messages(
 
 
 class ChatState(TypedDict):
-    """LangGraph의 각 노드가 읽고 갱신하는 금융상품 대화 상태."""
+    """
+    현재 대화가 어디까지 진행됐는지 저장하는 챗봇의 상태
+    """
 
     messages: list[BaseMessage]
     product_type: str | None
@@ -92,7 +94,9 @@ def append_message(
     messages: list[BaseMessage],
     message: BaseMessage,
 ) -> list[BaseMessage]:
-    """새 메시지를 추가하고 최근 대화 기록만 남긴다.
+    """
+    새 메시지를 추가하고 최근 대화 기록만 남긴다.
+    단, 무한히 저장하지 않고 최근 20개까지만 유지한다. 
 
     Args:
         messages (list[BaseMessage]): 현재까지 저장된 대화 메시지.
@@ -105,7 +109,9 @@ def append_message(
 
 
 def ask_missing_info(state):
-    """추천에 필요한 필수 조건 중 가장 먼저 비어 있는 값을 질문한다.
+    """
+    현재 State를 보고 필수 조건이 부족한지 확인한다.
+    현재 필수값은 상품 유형, 기간, 금리 기준이다.
 
     Args:
         state (ChatState): 조건 추출이 끝난 현재 대화 상태.
@@ -137,7 +143,10 @@ def ask_missing_info(state):
 
 
 def route_after_missing_check(state) -> Literal["retrieve", "end"]:
-    """추가 질문 여부에 따라 검색 단계 또는 현재 턴 종료로 분기한다.
+    """
+    여기가 분기 함수!
+    pending_question이 있으면 추가 질문을 하고,
+    없으면 retrieve로 상품 검색을 한다.
 
     Args:
         state (ChatState): 필수 조건 확인을 마친 상태.
@@ -214,7 +223,11 @@ def generate_answer(state, llm, prompt=ANSWER_PROMPT):
 
 
 def build_graph(products: list[Product], vectorstore, llm):
-    """상품 데이터와 벡터스토어가 연결된 LangGraph 앱을 생성한다.
+    """
+    상품 데이터와 벡터스토어가 연결된 LangGraph 앱을 생성한다.
+    지금까지의 함수들을 연결하는 거임
+    extract_preferences -> ask_missing_info -> retrieve_products -> generate_answer
+    이 네 단계를 node로 등록하고, edge로 연결해서 순차적으로 실행되도록 한다.
 
     Args:
         products (list[dict]): 정제된 금융상품 목록.
@@ -318,7 +331,7 @@ def print_bot_reply(state):
 
 
 def run_scripted(app, turns):
-    """미리 준비된 사용자 발화 목록으로 멀티턴 대화를 실행한다.
+    """미리 준비된 사용자 발화 목록으로 멀티턴 대화를 실행한다. (테스트용)
 
     Args:
         app (CompiledStateGraph): 실행할 LangGraph 앱.

@@ -120,7 +120,7 @@ def main():
     print(f"collection: {COLLECTION_NAME}")
     print(f"vector count: {count}")
     print(f"persisted at: {PERSIST_DIR}")
-
+    # 벡터스토어가 제대로 만들어졌는지 확인하는 샘플 검색
     results = vectorstore.similarity_search("12개월 정기예금 중 금리가 높은 상품", k=3)
     print()
     print("[sample search]")

@@ -2,6 +2,7 @@
 
 데이터 수집 스크립트, 벡터스토어 구축 과정, LangGraph 챗봇이 같은 `.env`
 로딩 방식과 OpenAI 모델 설정을 사용하도록 공통 설정을 한곳에 모은다.
+그래야 나중에 임베딩 모델 바꿀 때 여러 파일 찾지 않아도 바로 수정이 가능하겠지!
 """
 
 import os
@@ -31,7 +32,7 @@ DEFAULT_CHAT_MODEL = "gpt-4.1-mini"
 
 
 def load_env(path=ENV_PATH):
-    """`.env` 값을 기존 환경 변수를 덮어쓰지 않고 등록한다.
+    """`.env` 파일을 읽어 환경 변수로 등록한다.
 
     Args:
         path (str | Path): 읽을 환경 변수 파일 경로.
@@ -61,6 +62,8 @@ def load_env(path=ENV_PATH):
 
 def require_env(name):
     """필수 환경 변수 값을 반환하고, 없으면 실행 방법을 알리는 예외를 낸다.
+        예를 들어 금감원 api 키가 없는데 프로그램 실행하면 머가 없어서 안 된다!
+        이런 걸 명확하게 알려준다.
 
     Args:
         name (str): 확인할 환경 변수 이름.
