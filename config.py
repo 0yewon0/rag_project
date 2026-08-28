@@ -27,7 +27,7 @@ COLLECTION_NAME = "financial_products"
 # 금융상품 문서와 사용자 질문을 벡터로 변환할 OpenAI 임베딩 모델.
 EMBEDDING_MODEL = "text-embedding-3-small"
 
-# 답변 생성에 사용할 기본 OpenAI 채팅 모델.
+# 조건 추출과 답변 생성에 사용할 기본 OpenAI 채팅 모델.
 DEFAULT_CHAT_MODEL = "gpt-5.6-terra"
 
 

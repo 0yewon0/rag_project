@@ -1,9 +1,9 @@
 """LangGraph로 금융상품 추천 대화의 상태와 실행 순서를 관리한다.
 
 조건 추출은 `preferences.py`, 상품 검색은 `retrieval.py`에 맡긴다. 이 모듈은
-필수 조건이 부족할 때 추가 질문을 하고, 조건이 모이면 검색과 답변 생성을
-차례로 실행하는 그래프를 구성한다. 콘솔에서 멀티턴 챗봇을 실행하는 진입점도
-함께 제공한다.
+LLM으로 사용자 발화의 추천 조건을 구조화하고, 필수 조건이 부족할 때 추가
+질문을 하며, 조건이 모이면 검색과 답변 생성을 차례로 실행하는 그래프를
+구성한다. 콘솔에서 멀티턴 챗봇을 실행하는 진입점도 함께 제공한다.
 """
 
 import argparse
@@ -160,10 +160,10 @@ def route_after_missing_check(state) -> Literal["retrieve", "end"]:
 
 
 def create_chat_model():
-    """환경 설정에 맞는 답변 생성용 OpenAI 채팅 모델을 만든다.
+    """환경 설정에 맞는 OpenAI 채팅 모델을 만든다.
 
     Returns:
-        ChatOpenAI: 그래프의 모든 대화 턴에서 재사용할 채팅 모델.
+        ChatOpenAI: 조건 추출과 답변 생성에 재사용할 채팅 모델.
     """
     model_name = os.getenv("OPENAI_CHAT_MODEL", DEFAULT_CHAT_MODEL)
     return ChatOpenAI(model=model_name, temperature=0.2)
@@ -232,14 +232,17 @@ def build_graph(products: list[Product], vectorstore, llm):
     Args:
         products (list[dict]): 정제된 금융상품 목록.
         vectorstore (Chroma): 의미 검색에 사용할 금융상품 벡터스토어.
-        llm (BaseChatModel): 답변 생성에 재사용할 채팅 모델.
+        llm (BaseChatModel): 조건 추출과 답변 생성에 재사용할 채팅 모델.
 
     Returns:
         CompiledStateGraph: 대화 턴을 실행할 수 있도록 컴파일된 그래프.
     """
     graph = StateGraph(ChatState)
 
-    graph.add_node("extract_preferences", extract_preferences)
+    graph.add_node(
+        "extract_preferences",
+        partial(extract_preferences, llm=llm),
+    )
     graph.add_node("ask_missing_info", ask_missing_info)
     graph.add_node(
         "retrieve_products",
