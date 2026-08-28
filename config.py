@@ -28,7 +28,7 @@ COLLECTION_NAME = "financial_products"
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 # 답변 생성에 사용할 기본 OpenAI 채팅 모델.
-DEFAULT_CHAT_MODEL = "gpt-4.1-mini"
+DEFAULT_CHAT_MODEL = "gpt-5.6-terra"
 
 
 def load_env(path=ENV_PATH):

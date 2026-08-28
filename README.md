@@ -83,7 +83,7 @@ OPENAI_API_KEY=
 
 - `FSS_API_KEY`: 금융감독원 금융상품 API 호출에 사용합니다.
 - `OPENAI_API_KEY`: 임베딩 생성과 챗봇 답변 생성에 사용합니다.
-- `OPENAI_CHAT_MODEL`: 선택값입니다. 설정하지 않으면 `gpt-4.1-mini`를 사용합니다.
+- `OPENAI_CHAT_MODEL`: 선택값입니다. 설정하지 않으면 `gpt-5.6-terra`를 사용합니다.
 
 금융상품 데이터 출처:
 https://www.fss.or.kr/fss/main/contents.do?menuNo=200008
