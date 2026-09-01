@@ -39,6 +39,8 @@ ANSWER_PROMPT = ChatPromptTemplate.from_messages(
                     "너는 예금과 적금 상품을 추천하는 금융상품 안내 챗봇이야.",
                     "반드시 제공된 상품 정보 안에서만 답해.",
                     "사용자의 조건에 맞는 상품만 추천해.",
+                    "조건 완화 대안은 메인 추천에 섞지 말고 별도 대안으로 구분해.",
+                    "대안의 완화 조건과 금리 개선폭은 제공된 계산 결과를 그대로 사용해.",
                     "금리는 기본금리와 최고우대금리를 구분해서 설명해.",
                     "추천 이유와 가입 전 확인할 주의사항을 짧게 포함해.",
                     "최종 가입 전 금융회사 공시와 약관 확인을 안내해.",
@@ -64,6 +66,9 @@ ANSWER_PROMPT = ChatPromptTemplate.from_messages(
                     "",
                     "검색된 상품 정보:",
                     "{context}",
+                    "",
+                    "조건 완화 대안:",
+                    "{alternative_context}",
                 ]
             ),
         ),
@@ -87,6 +92,8 @@ class ChatState(TypedDict):
     mobile_join_preferred: bool | None
     pending_question: str | None
     retrieved_context: str | None
+    alternative_recommendations: list[dict] | None
+    alternative_context: str | None
     answer: str | None
 
 
@@ -209,6 +216,7 @@ def generate_answer(state, llm, prompt=ANSWER_PROMPT):
             "auto_transfer_ok": state.get("auto_transfer_ok"),
             "mobile_join_preferred": state.get("mobile_join_preferred"),
             "context": state.get("retrieved_context") or "검색 결과 없음",
+            "alternative_context": state.get("alternative_context") or "대안 없음",
         }
     )
 
@@ -291,6 +299,8 @@ def initial_state():
         "mobile_join_preferred": None,
         "pending_question": None,
         "retrieved_context": None,
+        "alternative_recommendations": None,
+        "alternative_context": None,
         "answer": None,
     }
 

@@ -2,7 +2,9 @@
 
 상품 유형, 기간, 납입액과 우대조건은 정확한 구조화 필터로 적용한다. 조건을
 통과한 상품은 사용자가 선택한 금리를 우선으로 정렬하고, 같은 금리 안에서는
-전체 대화와 의미적으로 가까운 상품을 먼저 배치해 LLM context를 만든다.
+전체 대화와 의미적으로 가까운 상품을 먼저 배치해 LLM context를 만든다. 메인
+추천과 별도로, 사용자의 핵심 조건은 유지한 채 완화 가능한 부가 조건 하나만
+바꿨을 때 더 좋은 금리 상품이 있는지도 deterministic하게 계산한다.
 """
 
 from langchain_core.messages import HumanMessage
@@ -10,6 +12,70 @@ from langchain_core.messages import HumanMessage
 from build_documents import product_to_document
 from models import Product, ProductOption
 from preferences import PRODUCT_TYPE_NAMES, RATE_PREFERENCE_NAMES
+
+MIN_ALTERNATIVE_RATE_IMPROVEMENT = 0.0
+
+CONDITION_FILTER_RULES = [
+    {
+        "state_key": "card_ok",
+        "state_value": False,
+        "condition_key": "requires_card",
+        "operator": "equals",
+        "condition_value": True,
+    },
+    {
+        "state_key": "salary_transfer_ok",
+        "state_value": False,
+        "condition_key": "requires_salary_transfer",
+        "operator": "equals",
+        "condition_value": True,
+    },
+    {
+        "state_key": "auto_transfer_ok",
+        "state_value": False,
+        "condition_key": "requires_auto_transfer",
+        "operator": "equals",
+        "condition_value": True,
+    },
+    {
+        "state_key": "mobile_join_preferred",
+        "state_value": True,
+        "condition_key": "supports_mobile",
+        "operator": "not_equals",
+        "condition_value": True,
+    },
+]
+
+RELAXABLE_CONDITION_RULES = [
+    {
+        "state_key": "card_ok",
+        "active_value": False,
+        "relaxed_value": None,
+        "label": "카드 조건",
+        "relaxed_label": "카드 사용/발급 조건 허용",
+    },
+    {
+        "state_key": "salary_transfer_ok",
+        "active_value": False,
+        "relaxed_value": None,
+        "label": "급여이체 조건",
+        "relaxed_label": "급여이체 조건 허용",
+    },
+    {
+        "state_key": "auto_transfer_ok",
+        "active_value": False,
+        "relaxed_value": None,
+        "label": "자동이체 조건",
+        "relaxed_label": "자동이체 조건 허용",
+    },
+    {
+        "state_key": "mobile_join_preferred",
+        "active_value": True,
+        "relaxed_value": None,
+        "label": "모바일 가입 선호",
+        "relaxed_label": "영업점/비대면 여부 제한 해제",
+    },
+]
 
 
 def option_rate(
@@ -66,20 +132,20 @@ def product_matches_user_conditions(product: Product, state: dict) -> bool:
     conditions = product.get("conditions", {})
     monthly_amount = state.get("monthly_amount")
 
-    if state.get("card_ok") is False and conditions.get("requires_card"):
-        return False
-    if state.get("salary_transfer_ok") is False and conditions.get(
-        "requires_salary_transfer"
-    ):
-        return False
-    if state.get("auto_transfer_ok") is False and conditions.get(
-        "requires_auto_transfer"
-    ):
-        return False
-    if state.get("mobile_join_preferred") is True and not conditions.get(
-        "supports_mobile"
-    ):
-        return False
+    for rule in CONDITION_FILTER_RULES:
+        if state.get(rule["state_key"]) != rule["state_value"]:
+            continue
+        condition_value = conditions.get(rule["condition_key"])
+        if (
+            rule["operator"] == "equals"
+            and condition_value == rule["condition_value"]
+        ):
+            return False
+        if (
+            rule["operator"] == "not_equals"
+            and condition_value != rule["condition_value"]
+        ):
+            return False
 
     if monthly_amount is not None:
         monthly_min = conditions.get("monthly_min_amount")
@@ -90,6 +156,61 @@ def product_matches_user_conditions(product: Product, state: dict) -> bool:
             return False
 
     return True
+
+
+def rank_product_candidates(
+    state,
+    products: list[Product],
+    semantic_ranks=None,
+) -> list[tuple[float | int, Product]]:
+    """현재 state 조건을 만족하는 상품을 금리와 의미 순위로 정렬한다.
+
+    Args:
+        state (dict): 추출된 사용자 조건이 담긴 현재 대화 상태.
+        products (list[dict]): 정제된 금융상품 목록.
+        semantic_ranks (dict | None): 상품 코드별 Chroma 검색 순위.
+
+    Returns:
+        list[tuple[float | int, Product]]: 선택 금리와 상품의 정렬된 목록.
+    """
+    candidates = []
+    for product in products:
+        if product.get("product_type") != state.get("product_type"):
+            continue
+        if not product_matches_user_conditions(product, state):
+            continue
+
+        options = matching_options(product, state.get("term_months"))
+        if not options:
+            continue
+
+        best_option = max(
+            options,
+            key=lambda option: option_rate(option, state.get("rate_preference")),
+        )
+        candidates.append(
+            (
+                option_rate(best_option, state.get("rate_preference")),
+                product,
+            )
+        )
+
+    if not candidates:
+        return []
+
+    semantic_ranks = semantic_ranks or {}
+    missing_rank = len(semantic_ranks) + 1
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            -semantic_ranks.get(
+                item[1].get("product_code"),
+                missing_rank,
+            ),
+        ),
+        reverse=True,
+    )
+    return candidates
 
 
 def build_search_query(state):
@@ -172,6 +293,109 @@ def format_context(documents):
     return "\n\n---\n\n".join(blocks)
 
 
+def relaxed_states(state):
+    """완화 가능한 부가 조건을 한 번에 하나씩만 바꾼 state를 만든다.
+
+    Args:
+        state (dict): 원래 사용자 조건이 들어 있는 대화 상태.
+
+    Returns:
+        list[tuple[dict, dict]]: 완화된 state와 적용한 완화 규칙 목록.
+    """
+    states = []
+    for rule in RELAXABLE_CONDITION_RULES:
+        if state.get(rule["state_key"]) != rule["active_value"]:
+            continue
+        states.append(
+            (
+                {
+                    **state,
+                    rule["state_key"]: rule["relaxed_value"],
+                },
+                rule,
+            )
+        )
+    return states
+
+
+def find_alternative_recommendations(
+    state,
+    products: list[Product],
+    baseline_rate: float | int | None,
+    semantic_ranks=None,
+):
+    """부가 조건 하나를 완화했을 때 더 높은 금리 상품이 있는지 찾는다.
+
+    Args:
+        state (dict): 원래 사용자 조건이 담긴 대화 상태.
+        products (list[dict]): 정제된 금융상품 목록.
+        baseline_rate (float | int | None): 현재 조건에서 가장 좋은 금리.
+        semantic_ranks (dict | None): 상품 코드별 Chroma 검색 순위.
+
+    Returns:
+        list[dict]: 완화 조건, 개선폭과 대안 상품을 담은 구조화 목록.
+    """
+    if baseline_rate is None:
+        return []
+
+    alternatives = []
+    for relaxed_state, rule in relaxed_states(state):
+        candidates = rank_product_candidates(
+            relaxed_state,
+            products,
+            semantic_ranks=semantic_ranks,
+        )
+        if not candidates:
+            continue
+
+        alternative_rate, alternative_product = candidates[0]
+        improvement = alternative_rate - baseline_rate
+        if improvement <= MIN_ALTERNATIVE_RATE_IMPROVEMENT:
+            continue
+
+        alternatives.append(
+            {
+                "condition_key": rule["state_key"],
+                "condition_label": rule["label"],
+                "relaxed_label": rule["relaxed_label"],
+                "baseline_rate": baseline_rate,
+                "alternative_rate": alternative_rate,
+                "improvement": improvement,
+                "product": alternative_product,
+            }
+        )
+
+    alternatives.sort(
+        key=lambda alternative: alternative["improvement"],
+        reverse=True,
+    )
+    return alternatives
+
+
+def format_alternative_context(alternatives):
+    """계산된 대안 후보를 LLM에게 전달할 텍스트로 바꾼다."""
+    if not alternatives:
+        return ""
+
+    blocks = []
+    for index, alternative in enumerate(alternatives, start=1):
+        product = alternative["product"]
+        title = (
+            f"{product.get('bank_name', '')} {product.get('product_name', '')}"
+        ).strip()
+        blocks.append(
+            f"[대안 {index}] {title}\n"
+            f"- 완화 조건: {alternative['condition_label']}\n"
+            f"- 완화 방식: {alternative['relaxed_label']}\n"
+            f"- 현재 최선 금리: {alternative['baseline_rate']}%\n"
+            f"- 대안 금리: {alternative['alternative_rate']}%\n"
+            f"- 개선폭: {alternative['improvement']:.2f}%p\n"
+            f"{product_to_document(product).page_content}"
+        )
+
+    return "\n\n---\n\n".join(blocks)
+
+
 def retrieve_products(
     state,
     products: list[Product],
@@ -195,32 +419,13 @@ def retrieve_products(
     Notes:
         금리를 우선 정렬하고, 금리가 같을 때만 Chroma 순위를 비교한다.
     """
-    candidates = []
-    for product in products:
-        if product.get("product_type") != state.get("product_type"):
-            continue
-        if not product_matches_user_conditions(product, state):
-            continue
-
-        options = matching_options(product, state.get("term_months"))
-        if not options:
-            continue
-
-        best_option = max(
-            options,
-            key=lambda option: option_rate(option, state.get("rate_preference")),
-        )
-        candidates.append(
-            (
-                option_rate(best_option, state.get("rate_preference")),
-                product,
-            )
-        )
-
-    if not candidates:
+    preliminary_candidates = rank_product_candidates(state, products)
+    if not preliminary_candidates:
         return {
             **state,
             "retrieved_context": "",
+            "alternative_recommendations": [],
+            "alternative_context": "",
         }
 
     semantic_ranks = semantic_product_ranks(
@@ -228,20 +433,23 @@ def retrieve_products(
         vectorstore,
         k=max(k * 4, 20),
     )
-    missing_rank = len(semantic_ranks) + 1
-    candidates.sort(
-        key=lambda item: (
-            item[0],
-            -semantic_ranks.get(
-                item[1].get("product_code"),
-                missing_rank,
-            ),
-        ),
-        reverse=True,
+    candidates = rank_product_candidates(
+        state,
+        products,
+        semantic_ranks=semantic_ranks,
+    )
+
+    alternatives = find_alternative_recommendations(
+        state,
+        products,
+        baseline_rate=candidates[0][0],
+        semantic_ranks=semantic_ranks,
     )
     documents = [product_to_document(product) for _, product in candidates[:k]]
 
     return {
         **state,
         "retrieved_context": format_context(documents),
+        "alternative_recommendations": alternatives,
+        "alternative_context": format_alternative_context(alternatives),
     }
